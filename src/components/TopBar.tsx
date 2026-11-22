@@ -19,12 +19,13 @@ import { useFrame } from './ControllerFrame';
 import { light, selection } from '../hooks/useHaptics';
 import { COLORS } from '../theme/colors';
 import { ModalType } from './ControllerModals';
+import { useConnection } from '../net/useConnection';
 
 export type ControllerMode = 'Controller' | 'Mouse' | 'Keyboard' | 'Touchpad';
 
 export interface ConnectionStatus {
-  status: 'Connected' | 'Disconnected' | 'Connecting';
-  type: 'USB' | 'Bluetooth' | 'Wi-Fi';
+  status: 'Connected' | 'Disconnected' | 'Connecting' | 'Reconnecting';
+  type: string;
 }
 
 export interface TopBarProps {
@@ -89,12 +90,67 @@ export const TopBar: React.FC<TopBarProps> = ({
 }) => {
   const { scale } = useFrame();
 
-  const isConnected = connectionStatus.status === 'Connected';
+  const conn = useConnection();
+
+  // Status dot color: green connected, amber connecting/handshaking/reconnecting, red failed/disconnected
+  const isConnected = conn.status === 'connected';
+  const isConnecting =
+    conn.status === 'connecting' ||
+    conn.status === 'handshaking' ||
+    conn.status === 'reconnecting';
+
   const statusDotColor = isConnected
     ? '#30D158'
-    : connectionStatus.status === 'Connecting'
+    : isConnecting
     ? '#FFD60A'
     : '#FF453A';
+
+  // Primary label with RTT in ms
+  const primaryStatusText = isConnected
+    ? `Connected${conn.rttMs > 0 ? ` • ${conn.rttMs}ms` : ''}`
+    : conn.status === 'connecting'
+    ? 'Connecting...'
+    : conn.status === 'handshaking'
+    ? 'Handshaking...'
+    : conn.status === 'reconnecting'
+    ? `Reconnecting (${conn.reconnectAttempt})...`
+    : connectionStatus?.status || 'Disconnected';
+
+  // Transport & Mode label
+  const isBluetooth = conn.transportKind === 'bluetooth';
+  const activeTransportName = conn.transportKind
+    ? conn.transportKind === 'wifi'
+      ? 'Wi-Fi'
+      : conn.transportKind === 'usb-tether'
+      ? 'USB Tether'
+      : conn.transportKind === 'usb-adb'
+      ? 'USB (ADB)'
+      : 'Bluetooth (higher latency)'
+    : null;
+
+  const modeDisplayName =
+    conn.connectionMode === 'auto'
+      ? 'Auto'
+      : conn.connectionMode === 'usb'
+      ? 'USB'
+      : conn.connectionMode === 'wifi'
+      ? 'Wi-Fi'
+      : 'Bluetooth (higher latency)';
+
+  const transportLabel = isConnected
+    ? conn.connectionMode === 'auto'
+      ? `Auto • ${activeTransportName || 'Linked'}`
+      : activeTransportName || modeDisplayName
+    : `${modeDisplayName} • ${conn.status === 'idle' ? 'Ready' : conn.status}`;
+
+  // Icon based on transport / selected mode
+  const activeIconKind = conn.transportKind || conn.connectionMode;
+  const linkIcon: keyof typeof Ionicons.glyphMap =
+    activeIconKind === 'wifi'
+      ? 'wifi-outline'
+      : activeIconKind === 'bluetooth'
+      ? 'bluetooth-outline'
+      : 'hardware-chip-outline';
 
   const modes: ControllerMode[] = ['Controller', 'Mouse', 'Keyboard', 'Touchpad'];
 
@@ -116,14 +172,14 @@ export const TopBar: React.FC<TopBarProps> = ({
         <View style={[styles.statusDot, { backgroundColor: statusDotColor }]} />
         <View style={styles.statusTextGroup}>
           <Text style={[styles.statusPrimary, { fontSize: Math.max(9, 10.5 * scale) }]}>
-            {connectionStatus.status}
+            {primaryStatusText}
           </Text>
           <Text style={[styles.statusSecondary, { fontSize: Math.max(7, 8 * scale) }]}>
-            {connectionStatus.type}
+            {transportLabel}
           </Text>
         </View>
         <Ionicons
-          name="hardware-chip-outline"
+          name={linkIcon}
           size={Math.max(10, 12 * scale)}
           color="#8A98AC"
           style={{ marginLeft: 4 * scale }}

@@ -17,6 +17,12 @@ import { ControllerModals, ModalType } from '../components/ControllerModals';
 import { MouseMode } from './MouseMode';
 import { KeyboardMode } from './KeyboardMode';
 import { TouchpadMode } from './TouchpadMode';
+import { PairScreen } from './PairScreen';
+import { UsbHelpBottomSheet } from '../components/UsbHelpBottomSheet';
+import { discoveryService } from '../pairing/DiscoveryService';
+import { usbWatcher } from '../net/UsbWatcher';
+import { useConnection } from '../net/useConnection';
+import { connectionManager } from '../net/ConnectionManager';
 import { DEBUG_LAYOUT, SOCKETS } from '../theme/layout';
 import { COLORS } from '../theme/colors';
 import { isHapticsEnabled } from '../hooks/useHaptics';
@@ -24,11 +30,14 @@ import { isHapticsEnabled } from '../hooks/useHaptics';
 export const ControllerScreen: React.FC = () => {
   useKeepAwake();
 
+  const conn = useConnection();
+
   // Mode state: 'Controller' | 'Mouse' | 'Keyboard' | 'Touchpad'
   const [mode, setMode] = useState<ControllerMode>('Controller');
 
   // Modal State for interactive dropdowns/popovers
   const [activeModal, setActiveModal] = useState<ModalType>(null);
+  const [isPairingOpen, setIsPairingOpen] = useState<boolean>(false);
 
   // Button Style Preference: 'playstation' (△, □, ○, ✕) vs 'xbox' (Y, X, B, A)
   const [buttonStyle, setButtonStyle] = useState<'playstation' | 'xbox'>('playstation');
@@ -52,7 +61,15 @@ export const ControllerScreen: React.FC = () => {
 
     lockLandscape();
 
+    // Start background mDNS discovery service for paired PCs
+    discoveryService.start();
+
+    // Start background USB auto-detection watcher (checks 127.0.0.1:47821 every 2s)
+    usbWatcher.start();
+
     return () => {
+      usbWatcher.stop();
+      discoveryService.stop();
       ScreenOrientation.unlockAsync().catch(() => {});
     };
   }, []);
@@ -194,6 +211,7 @@ export const ControllerScreen: React.FC = () => {
       <ControllerModals
         activeModal={activeModal}
         onClose={() => setActiveModal(null)}
+        onOpenPairing={() => setIsPairingOpen(true)}
         buttonStyle={buttonStyle}
         onToggleButtonStyle={setButtonStyle}
         hapticsOn={hapticsOn}
@@ -206,6 +224,18 @@ export const ControllerScreen: React.FC = () => {
         onSelectProfile={setActiveProfile}
         isDebugActive={isDebugLayoutActive}
         onToggleDebug={() => setIsDebugLayoutActive((prev) => !prev)}
+      />
+
+      {/* PC Pairing & Camera QR Scanner Screen */}
+      <PairScreen
+        visible={isPairingOpen}
+        onClose={() => setIsPairingOpen(false)}
+      />
+
+      {/* USB Setup Help Bottom Sheet */}
+      <UsbHelpBottomSheet
+        visible={!!conn.isUsbHelpVisible}
+        onClose={() => connectionManager.setUsbHelpVisible(false)}
       />
     </View>
   );

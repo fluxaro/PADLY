@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,6 +14,8 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 import { COLORS } from '../theme/colors';
 import { light, mechanicalClick, selection, setHapticsEnabled } from '../hooks/useHaptics';
+import { useConnection } from '../net/useConnection';
+import { connectionManager, ConnectionMode } from '../net/ConnectionManager';
 
 export type ModalType =
   | 'connection'
@@ -25,11 +28,14 @@ export type ModalType =
   | 'brightness'
   | 'theme'
   | 'layout'
+  | 'pairing'
   | null;
 
 interface ControllerModalsProps {
   activeModal: ModalType;
   onClose: () => void;
+  onOpenPairing?: () => void;
+  onOpenBluetoothPicker?: () => void;
   // Shared state
   buttonStyle: 'xbox' | 'playstation';
   onToggleButtonStyle: (style: 'xbox' | 'playstation') => void;
@@ -48,6 +54,8 @@ interface ControllerModalsProps {
 export const ControllerModals: React.FC<ControllerModalsProps> = ({
   activeModal,
   onClose,
+  onOpenPairing,
+  onOpenBluetoothPicker,
   buttonStyle,
   onToggleButtonStyle,
   hapticsOn,
@@ -61,6 +69,7 @@ export const ControllerModals: React.FC<ControllerModalsProps> = ({
   isDebugActive,
   onToggleDebug,
 }) => {
+  const conn = useConnection();
   if (!activeModal) return null;
 
   const renderModalContent = () => {
@@ -111,6 +120,25 @@ export const ControllerModals: React.FC<ControllerModalsProps> = ({
             >
               <Text style={styles.actionPrimaryBtnText}>Refresh Connection</Text>
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.actionPrimaryBtn,
+                {
+                  marginTop: 8,
+                  backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                  borderWidth: 1,
+                  borderColor: 'rgba(255, 255, 255, 0.12)',
+                },
+              ]}
+              onPress={() => {
+                selection();
+                onClose();
+                onOpenPairing?.();
+              }}
+            >
+              <Text style={styles.actionPrimaryBtnText}>Pairing & Saved Devices</Text>
+            </TouchableOpacity>
           </View>
         );
 
@@ -128,6 +156,92 @@ export const ControllerModals: React.FC<ControllerModalsProps> = ({
             </View>
 
             <ScrollView style={styles.scrollBody} showsVerticalScrollIndicator={false}>
+              {/* Option 0: Connection Mode Selector (Auto, USB, Wi-Fi, BT) */}
+              <View style={styles.settingRow}>
+                <View style={{ flex: 1, paddingRight: 8 }}>
+                  <Text style={styles.settingLabel}>Connection Mode</Text>
+                  <Text style={styles.settingSub}>
+                    {conn.connectionMode === 'auto'
+                      ? 'Auto (prefer USB, then Wi-Fi, then Bluetooth)'
+                      : conn.connectionMode === 'usb'
+                      ? 'USB only (adb reverse & tethering)'
+                      : conn.connectionMode === 'wifi'
+                      ? 'Wi-Fi only (UDP)'
+                      : 'Bluetooth only (RFCOMM)'}
+                  </Text>
+                </View>
+                <View style={styles.pillToggleGroup}>
+                  {(
+                    (Platform.OS === 'android'
+                      ? ['auto', 'usb', 'wifi', 'bluetooth']
+                      : ['auto', 'usb', 'wifi']) as ConnectionMode[]
+                  ).map((mode) => {
+                    const isSelected = conn.connectionMode === mode;
+                    const label =
+                      mode === 'auto'
+                        ? 'Auto'
+                        : mode === 'usb'
+                        ? 'USB'
+                        : mode === 'wifi'
+                        ? 'Wi-Fi'
+                        : 'BT';
+                    return (
+                      <TouchableOpacity
+                        key={mode}
+                        style={[styles.pillOption, isSelected && styles.pillOptionActive]}
+                        onPress={() => {
+                          selection();
+                          connectionManager.setConnectionMode(mode);
+                        }}
+                      >
+                        <Text
+                          style={[styles.pillOptionText, isSelected && styles.pillOptionTextActive]}
+                        >
+                          {label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              {/* Option 0.3: Bluetooth RFCOMM Devices (Android Only) */}
+              {Platform.OS === 'android' && (
+                <TouchableOpacity
+                  style={styles.settingRow}
+                  onPress={() => {
+                    selection();
+                    onClose();
+                    onOpenBluetoothPicker?.();
+                  }}
+                >
+                  <View>
+                    <Text style={styles.settingLabel}>Bluetooth RFCOMM Devices</Text>
+                    <Text style={styles.settingSub}>
+                      Pair or select bonded PC for Bluetooth transport
+                    </Text>
+                  </View>
+                  <Ionicons name="bluetooth-outline" size={20} color="#2F8BFF" />
+                </TouchableOpacity>
+              )}
+
+              {/* Option 0.5: Pairing & Devices */}
+              <TouchableOpacity
+                style={styles.settingRow}
+                onPress={() => {
+                  selection();
+                  onClose();
+                  onOpenPairing?.();
+                }}
+              >
+                <View>
+                  <Text style={[styles.settingLabel, { color: COLORS.accent }]}>
+                    PC Pairing & Wi-Fi Link
+                  </Text>
+                  <Text style={styles.settingSub}>Scan QR code or manage paired computers</Text>
+                </View>
+                <Ionicons name="qr-code-outline" size={20} color={COLORS.accent} />
+              </TouchableOpacity>
               {/* Option 1: Button Labels Format */}
               <View style={styles.settingRow}>
                 <View>

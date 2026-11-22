@@ -21,6 +21,10 @@ import {
   FRAME_IMAGE,
   SOCKETS,
 } from '../theme/layout';
+import {
+  calculateResponsiveDisplacement,
+  ResponsiveFrameMetrics,
+} from '../utils/responsiveLayout';
 
 export interface FrameOffset {
   x: number;
@@ -58,7 +62,7 @@ let currentFrameState = {
 };
 
 /**
- * Converts design canvas coordinates (876x472 space) into actual device coordinates.
+ * Converts design canvas coordinates (923x426 space) into actual device coordinates.
  * Formula: position = design value * scale + offset
  */
 export function toDevice(
@@ -72,6 +76,12 @@ export function toDevice(
     y: y * scale + offset.y,
   };
 }
+
+export {
+  calculateResponsiveDisplacement,
+  getButtonDisplacement,
+  calculateAllButtonLocations,
+} from '../utils/responsiveLayout';
 
 interface ControllerFrameProps {
   children?: React.ReactNode;
@@ -106,23 +116,23 @@ export const ControllerFrame: React.FC<ControllerFrameProps> = ({ children, debu
     }
   };
 
-  const { scale, offsetX, offsetY, offset } = useMemo(() => {
-    const s = Math.min(containerW / DESIGN_W, containerH / DESIGN_H);
-    const renderedW = DESIGN_W * s;
-    const renderedH = DESIGN_H * s;
-    const ox = (containerW - renderedW) / 2;
-    const oy = (containerH - renderedH) / 2;
-    const off = { x: ox, y: oy };
-
-    currentFrameState = { scale: s, offset: off };
-
-    return {
-      scale: s,
-      offsetX: ox,
-      offsetY: oy,
-      offset: off,
+  const responsiveMetrics = useMemo(() => {
+    const metrics = calculateResponsiveDisplacement(containerW, containerH);
+    currentFrameState = {
+      scale: metrics.scale,
+      offset: { x: metrics.offsetX, y: metrics.offsetY },
     };
+    return metrics;
   }, [containerW, containerH]);
+
+  const { scale, offsetX, offsetY, offset } = useMemo(() => {
+    return {
+      scale: responsiveMetrics.scale,
+      offsetX: responsiveMetrics.offsetX,
+      offsetY: responsiveMetrics.offsetY,
+      offset: { x: responsiveMetrics.offsetX, y: responsiveMetrics.offsetY },
+    };
+  }, [responsiveMetrics]);
 
   const contextValue = useMemo<FrameContextValue>(
     () => ({
@@ -130,13 +140,13 @@ export const ControllerFrame: React.FC<ControllerFrameProps> = ({ children, debu
       offset,
       offsetX,
       offsetY,
-      toDevice: (x: number, y: number) => ({
-        x: x * scale + offsetX,
-        y: y * scale + offsetY,
-      }),
+      toDevice: (x: number, y: number) => {
+        const pt = responsiveMetrics.moveToRightLocation(x, y);
+        return { x: pt.x, y: pt.y };
+      },
       breathe,
     }),
-    [scale, offset, offsetX, offsetY, breathe]
+    [scale, offset, offsetX, offsetY, responsiveMetrics, breathe]
   );
 
   return (

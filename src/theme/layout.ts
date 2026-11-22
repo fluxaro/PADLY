@@ -66,15 +66,15 @@ export const SOCKETS = {
   // Central Touchpad Panel
   touchpad: { x: 326, y: 20, w: 270, h: 122, radius: 18 },
 
-  // Shoulder Triggers and Bumpers perfectly sculpted into the chassis contours
-  // L2 (LT Trigger): Top shoulder arch
-  LT: { x: 95, y: 35, w: 124, h: 40 },
-  // L1 (LB Bumper): Ergonomic shoulder seam
-  LB: { x: 84, y: 76, w: 114, h: 36 },
-  // R2 (RT Trigger): Top right shoulder arch
-  RT: { x: 704, y: 35, w: 124, h: 40 },
-  // R1 (RB Bumper): Ergonomic right shoulder seam
-  RB: { x: 725, y: 76, w: 114, h: 36 },
+  // Shoulder Triggers and Bumpers sculpted to fit the exact cavities in frame.png
+  // L2 (LT Trigger): Top left cavity
+  LT: { x: 88.5, y: 21, w: 121, h: 43 },
+  // L1 (LB Bumper): Bottom left cavity
+  LB: { x: 88, y: 60.5, w: 108, h: 40 },
+  // R2 (RT Trigger): Top right cavity
+  RT: { x: 714, y: 21, w: 121.5, h: 42 },
+  // R1 (RB Bumper): Bottom right cavity
+  RB: { x: 728, y: 60.5, w: 107.5, h: 39.5 },
 
   // Central Functional Buttons
   home: { cx: 461, cy: 192, r: 34 },

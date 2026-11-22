@@ -17,7 +17,6 @@ import Animated, {
   useDerivedValue,
   useSharedValue,
   withSpring,
-  withTiming,
 } from 'react-native-reanimated';
 
 import { useFrame } from './ControllerFrame';
@@ -25,6 +24,7 @@ import { emit, ButtonId } from '../input/inputBus';
 import { light, mechanicalClick } from '../hooks/useHaptics';
 import { usePressFeedback } from '../hooks/usePressFeedback';
 import { COLORS } from '../theme/colors';
+import { exactShoulderPaths } from '../theme/shoulderData';
 
 export type BumperId = 'LT' | 'LB' | 'RT' | 'RB';
 
@@ -41,108 +41,12 @@ export interface BumperProps {
   labelOverride?: string;
 }
 
-/**
- * Creates custom sculpted SVG paths matching the chassis shoulders.
- * Triggers (L2/R2) have a swept shoulder arch.
- * Bumpers (L1/R1) have an ergonomic curved pill contour.
- */
-function createShoulderSvg(w: number, h: number, isRight: boolean, isTrigger: boolean): string {
-  const rCorner = Math.max(6, h * 0.3);
-
-  if (isTrigger) {
-    // Ergonomic top trigger with swept shoulder taper
-    if (!isRight) {
-      // Left Trigger (L2) - sweeps downward to the outer left
-      return `
-        M ${rCorner * 1.5} 0
-        L ${w - 4} 2
-        A 6 6 0 0 1 ${w} 8
-        L ${w} ${h - 5}
-        A 6 6 0 0 1 ${w - 5} ${h}
-        L ${rCorner} ${h}
-        A ${rCorner} ${rCorner} 0 0 1 0 ${h - rCorner}
-        L 2 ${rCorner * 1.6}
-        A ${rCorner} ${rCorner} 0 0 1 ${rCorner * 1.5} 0
-        Z
-      `.replace(/\s+/g, ' ').trim();
-    } else {
-      // Right Trigger (R2) - sweeps downward to the outer right
-      return `
-        M 4 2
-        L ${w - rCorner * 1.5} 0
-        A ${rCorner} ${rCorner} 0 0 1 ${w - 2} ${rCorner * 1.6}
-        L ${w} ${h - rCorner}
-        A ${rCorner} ${rCorner} 0 0 1 ${w - rCorner} ${h}
-        L 5 ${h}
-        A 6 6 0 0 1 0 ${h - 5}
-        L 0 8
-        A 6 6 0 0 1 4 2
-        Z
-      `.replace(/\s+/g, ' ').trim();
-    }
-  } else {
-    // Shoulder Bumper (L1 / R1) - ergonomic contoured capsule
-    if (!isRight) {
-      // Left Bumper (L1)
-      return `
-        M ${rCorner * 1.8} 0
-        L ${w - 5} 0
-        A 5 5 0 0 1 ${w} 5
-        L ${w} ${h - 5}
-        A 5 5 0 0 1 ${w - 5} ${h}
-        L ${rCorner * 1.4} ${h}
-        A ${rCorner} ${rCorner} 0 0 1 0 ${h - rCorner}
-        L 0 ${rCorner * 1.2}
-        A ${rCorner} ${rCorner} 0 0 1 ${rCorner * 1.8} 0
-        Z
-      `.replace(/\s+/g, ' ').trim();
-    } else {
-      // Right Bumper (R1)
-      return `
-        M 5 0
-        L ${w - rCorner * 1.8} 0
-        A ${rCorner} ${rCorner} 0 0 1 ${w} ${rCorner * 1.2}
-        L ${w} ${h - rCorner}
-        A ${rCorner} ${rCorner} 0 0 1 ${w - rCorner * 1.4} ${h}
-        L 5 ${h}
-        A 5 5 0 0 1 0 ${h - 5}
-        L 0 5
-        A 5 5 0 0 1 5 0
-        Z
-      `.replace(/\s+/g, ' ').trim();
-    }
-  }
-}
-
-/**
- * Creates outer accent glow stroke path along the bumper contour.
- */
-function createOuterGlowStroke(w: number, h: number, isRight: boolean, isTrigger: boolean): string {
-  const r = Math.max(6, h * 0.3);
-  if (!isRight) {
-    return `
-      M ${r * 1.5} 1
-      A ${r} ${r} 0 0 0 1 ${r * 1.6}
-      L 1 ${h - r}
-      A ${r} ${r} 0 0 0 ${r} ${h - 1}
-    `.replace(/\s+/g, ' ').trim();
-  } else {
-    return `
-      M ${w - r * 1.5} 1
-      A ${r} ${r} 0 0 1 ${w - 1} ${r * 1.6}
-      L ${w - 1} ${h - r}
-      A ${r} ${r} 0 0 1 ${w - r} ${h - 1}
-    `.replace(/\s+/g, ' ').trim();
-  }
-}
-
 export const Bumper: React.FC<BumperProps> = ({ id, socket, labelOverride }) => {
   const { toDevice, scale, breathe } = useFrame();
 
   const isTrigger = id === 'LT' || id === 'RT';
-  const isRight = id === 'RT' || id === 'RB';
 
-  // Display label: default to PlayStation terminology L2/L1/R2/R1 as requested by user
+  // Display label: default to PlayStation L2/L1/R2/R1
   const displayLabel = useMemo(() => {
     if (labelOverride) return labelOverride;
     switch (id) {
@@ -163,7 +67,8 @@ export const Bumper: React.FC<BumperProps> = ({ id, socket, labelOverride }) => 
   const width = socket.w * scale;
   const height = socket.h * scale;
 
-  const padding = 10 * scale;
+  // Extra padding for glow effect
+  const padding = 4 * scale;
   const canvasW = width + padding * 2;
   const canvasH = height + padding * 2;
 
@@ -185,7 +90,7 @@ export const Bumper: React.FC<BumperProps> = ({ id, socket, labelOverride }) => 
   };
 
   // Drag height for analog triggers
-  const maxDragDistance = 45 * scale;
+  const maxDragDistance = 40 * scale;
 
   const panGesture = Gesture.Pan()
     .minDistance(0)
@@ -195,7 +100,6 @@ export const Bumper: React.FC<BumperProps> = ({ id, socket, labelOverride }) => 
       startY.value = event.y;
 
       if (isTrigger) {
-        // Immediate engagement on touch
         triggerVal.value = 1;
         runOnJS(mechanicalClick)();
         runOnJS(emitTrigger)(1);
@@ -207,7 +111,6 @@ export const Bumper: React.FC<BumperProps> = ({ id, socket, labelOverride }) => 
     .onUpdate((event) => {
       'worklet';
       if (isTrigger) {
-        // Vertical drag maps downward to 0..1
         const dy = event.y - startY.value;
         const mapped = Math.max(0.15, Math.min(1, 0.5 + dy / maxDragDistance));
         triggerVal.value = mapped;
@@ -232,18 +135,27 @@ export const Bumper: React.FC<BumperProps> = ({ id, socket, labelOverride }) => 
       }
     });
 
-  // Skia Path generation
+  // Select exact cavity SVG path from the chassis scan
+  const rawSvgPath = useMemo(() => {
+    switch (id) {
+      case 'LT':
+        return exactShoulderPaths.L2;
+      case 'LB':
+        return exactShoulderPaths.L1;
+      case 'RT':
+        return exactShoulderPaths.R2;
+      case 'RB':
+        return exactShoulderPaths.R1;
+    }
+  }, [id]);
+
+  // Exact cavity SVG path from the chassis scan
   const shoulderPath = useMemo(() => {
-    const d = createShoulderSvg(width, height, isRight, isTrigger);
-    return Skia.Path.MakeFromSVGString(d);
-  }, [width, height, isRight, isTrigger]);
+    if (!rawSvgPath) return null;
+    return Skia.Path.MakeFromSVGString(rawSvgPath);
+  }, [rawSvgPath]);
 
-  const outerGlowPath = useMemo(() => {
-    const d = createOuterGlowStroke(width, height, isRight, isTrigger);
-    return Skia.Path.MakeFromSVGString(d);
-  }, [width, height, isRight, isTrigger]);
-
-  // Label Fonts
+  // Label Fonts in design-space (scaled via canvas Group transform)
   const fontMain = useMemo(() => {
     return matchFont({
       fontFamily: Platform.select({
@@ -251,10 +163,10 @@ export const Bumper: React.FC<BumperProps> = ({ id, socket, labelOverride }) => 
         android: 'sans-serif',
         default: 'sans-serif',
       }),
-      fontSize: Math.max(11, height * 0.44),
+      fontSize: Math.max(11, socket.h * 0.4),
       fontWeight: 'bold',
     });
-  }, [height]);
+  }, [socket.h]);
 
   const fontSub = useMemo(() => {
     return matchFont({
@@ -263,33 +175,33 @@ export const Bumper: React.FC<BumperProps> = ({ id, socket, labelOverride }) => 
         android: 'sans-serif',
         default: 'sans-serif',
       }),
-      fontSize: Math.max(7, height * 0.22),
+      fontSize: Math.max(7, socket.h * 0.22),
       fontWeight: 'normal',
     });
-  }, [height]);
+  }, [socket.h]);
 
   const { textX, textY, subX, subY } = useMemo(() => {
-    const cx = padding + width / 2;
-    const cy = padding + height / 2;
+    const cx = socket.w * 0.52;
+    const cy = socket.h * 0.45;
     let mainX = cx;
-    let mainY = cy + 4;
+    let mainY = cy;
     let sx = cx;
     let sy = cy;
 
     if (fontMain) {
       const b = fontMain.measureText(displayLabel);
       mainX = cx - b.width / 2 - b.x;
-      mainY = cy - b.height / 2 - b.y - (fontSub ? 2 : 0);
+      mainY = cy - b.height / 2 - b.y - (fontSub ? 3 : 0);
     }
 
     if (fontSub) {
       const b2 = fontSub.measureText(subLabel);
       sx = cx - b2.width / 2 - b2.x;
-      sy = mainY + 11 * scale;
+      sy = mainY + 9;
     }
 
     return { textX: mainX, textY: mainY, subX: sx, subY: sy };
-  }, [fontMain, fontSub, displayLabel, subLabel, width, height, padding, scale]);
+  }, [fontMain, fontSub, displayLabel, subLabel, socket.w, socket.h]);
 
   // Animated glow derived values
   const edgeGlowOpacity = useDerivedValue(() => {
@@ -315,7 +227,7 @@ export const Bumper: React.FC<BumperProps> = ({ id, socket, labelOverride }) => 
 
   const triggerFillOpacity = useDerivedValue(() => {
     if (!isTrigger) return 0;
-    return triggerVal.value * 0.42;
+    return triggerVal.value * 0.45;
   });
 
   return (
@@ -345,58 +257,48 @@ export const Bumper: React.FC<BumperProps> = ({ id, socket, labelOverride }) => 
             pointerEvents="none"
           >
             {shoulderPath && (
-              <Group>
-                {/* 1. Outer Glow along the curved shoulder seam */}
-                {outerGlowPath && (
-                  <Path
-                    path={outerGlowPath}
-                    style="stroke"
-                    strokeWidth={edgeStrokeWidth}
-                    color={COLORS.accent}
-                    opacity={edgeGlowOpacity}
-                  >
-                    <BlurMask blur={edgeGlowBlur} style="normal" />
-                  </Path>
-                )}
+              <Group transform={[{ translateX: padding }, { translateY: padding }, { scale }]}>
+                {/* 1. Deep Socket Cavity Shadow */}
+                <Path path={shoulderPath} color="#05070A" />
 
-                {/* 2. Main Bumper Body with Metallic Gunmetal Gradient */}
+                {/* 2. Outer Glow around the button contour */}
+                <Path
+                  path={shoulderPath}
+                  style="stroke"
+                  strokeWidth={edgeStrokeWidth}
+                  color={COLORS.accent}
+                  opacity={edgeGlowOpacity}
+                >
+                  <BlurMask blur={edgeGlowBlur} style="outer" />
+                </Path>
+
+                {/* 3. Main Bumper Body with Metallic Gunmetal Gradient */}
                 <Path path={shoulderPath}>
                   <LinearGradient
-                    start={vec(padding, padding)}
-                    end={vec(padding + width, padding + height)}
+                    start={vec(0, 0)}
+                    end={vec(socket.w, socket.h)}
                     colors={['#2D3543', '#1A202A', '#0D1016', '#05070B']}
                   />
                 </Path>
 
-                {/* 3. Dynamic Analog Trigger Fill Gauge */}
+                {/* 4. Dynamic Analog Trigger Fill Gauge */}
                 {isTrigger && (
                   <Path path={shoulderPath} opacity={triggerFillOpacity}>
                     <LinearGradient
-                      start={vec(padding, padding)}
-                      end={vec(padding, padding + height)}
+                      start={vec(0, 0)}
+                      end={vec(0, socket.h)}
                       colors={['#2F8BFF', '#1A5BBB', 'rgba(47, 139, 255, 0.1)']}
                     />
                   </Path>
                 )}
 
-                {/* 4. Fine beveled inner rim stroke */}
+                {/* 5. Fine beveled inner rim stroke */}
                 <Path
                   path={shoulderPath}
                   style="stroke"
                   strokeWidth={1}
-                  color="rgba(255, 255, 255, 0.14)"
+                  color="rgba(255, 255, 255, 0.16)"
                 />
-
-                {/* 5. Glowing outer rim highlight */}
-                {outerGlowPath && (
-                  <Path
-                    path={outerGlowPath}
-                    style="stroke"
-                    strokeWidth={1.2}
-                    color="#88C0FF"
-                    opacity={edgeGlowOpacity}
-                  />
-                )}
 
                 {/* 6. Primary Label (L2, L1, R2, R1) */}
                 {fontMain && (
