@@ -27,6 +27,7 @@
         "android.permission.CAMERA",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_ADVERTISE",
         "android.permission.RECORD_AUDIO"
       ]
     },

@@ -37,6 +37,10 @@ import {
   resetState as resetAggregatorState,
 } from '../input/stateAggregator';
 import { WifiLockManager } from './WifiLockManager';
+import { metricsCollector } from './MetricsCollector';
+import { rumbleManager } from '../input/rumbleManager';
+import { PairingStore } from '../pairing/PairingStore';
+import { bluetoothHidService } from './BluetoothHidService';
 
 // Safe require of AppState for React Native & test environments
 let AppState: any = null;
@@ -54,18 +58,95 @@ export type ConnectionStatus =
   | 'reconnecting'
   | 'failed';
 
-export type ConnectionMode = 'auto' | 'usb' | 'wifi' | 'bluetooth';
+export type ConnectionMode = 'auto' | 'usb' | 'wifi' | 'bluetooth' | 'bluetooth-hid';
+
+/**
+ * Human-readable message converter for all link failure modes:
+ * - No network
+ * - PC off / unreachable
+ * - Wrong key
+ * - Key rotated (PC re-paired)
+ * - Bluetooth off
+ * - Permission denied
+ */
+export function formatConnectionErrorMessage(rawError?: string, transportKind?: string): string {
+  if (!rawError) return '';
+  const errLower = rawError.toLowerCase();
+
+  if (
+    errLower.includes('no network') ||
+    errLower.includes('enotfound') ||
+    errLower.includes('enetunreach') ||
+    errLower.includes('ehostunreach') ||
+    errLower.includes('network is unreachable')
+  ) {
+    return 'No network connection detected. Please connect your phone to Wi-Fi or plug in a USB cable.';
+  }
+
+  if (
+    errLower.includes('handshake timeout') ||
+    errLower.includes('timed out') ||
+    errLower.includes('no response from pc') ||
+    errLower.includes('econnrefused') ||
+    errLower.includes('connection refused')
+  ) {
+    return 'Could not reach your PC. Please verify that the Padly PC app is running and your phone is on the same local network or USB.';
+  }
+
+  if (
+    errLower.includes('key mismatch') ||
+    errLower.includes('decrypt') ||
+    errLower.includes('tag mismatch') ||
+    errLower.includes('pairing key mismatch')
+  ) {
+    return 'Authentication failed: pairing key mismatch. Please re-scan the QR code from the PC app.';
+  }
+
+  if (
+    errLower.includes('rejected by pc') ||
+    errLower.includes('accepted != 1') ||
+    errLower.includes('key rotated') ||
+    errLower.includes('re-paired')
+  ) {
+    return 'Pairing key is no longer valid. The PC app may have regenerated its key or re-paired. Please scan the updated QR code.';
+  }
+
+  if (
+    errLower.includes('bluetooth is disabled') ||
+    errLower.includes('bluetooth off') ||
+    errLower.includes('bluetooth adapter not enabled')
+  ) {
+    return 'Bluetooth is turned off. Please turn on Bluetooth in your device settings to connect.';
+  }
+
+  if (
+    errLower.includes('permission denied') ||
+    errLower.includes('permissions') ||
+    errLower.includes('securityexception')
+  ) {
+    return 'Permission denied. Please grant the required Bluetooth or Camera permissions in device settings.';
+  }
+
+  return rawError;
+}
 
 export interface ConnectionStoreState {
   status: ConnectionStatus;
   connectionMode: ConnectionMode;
   rttMs: number;
+  avgRttMs: number;
+  p95RttMs: number;
   jitterMs: number;
   lossPercent: number;
+  pps: number;
+  bps: number;
+  isHighWifiLatency: boolean;
   transportKind: TransportKind | null;
   pcName: string | null;
+  emulatedTarget?: 'xbox' | 'ds4';
   reconnectAttempt: number;
   error?: string;
+  humanError?: string;
   isUsbHelpVisible?: boolean;
 }
 
@@ -118,8 +199,13 @@ export class ConnectionManager {
     status: 'idle',
     connectionMode: 'auto',
     rttMs: 0,
+    avgRttMs: 0,
+    p95RttMs: 0,
     jitterMs: 0,
     lossPercent: 0,
+    pps: 0,
+    bps: 0,
+    isHighWifiLatency: false,
     transportKind: null,
     pcName: null,
     reconnectAttempt: 0,
@@ -132,20 +218,41 @@ export class ConnectionManager {
     this.loadPersistedConnectionMode();
   }
 
+  private hidUnsub: (() => void) | null = null;
+
   private async loadPersistedConnectionMode(): Promise<void> {
     try {
       const saved = await AsyncStorage.getItem('padly_connection_mode');
-      if (saved === 'auto' || saved === 'usb' || saved === 'wifi' || saved === 'bluetooth') {
+      if (
+        saved === 'auto' ||
+        saved === 'usb' ||
+        saved === 'wifi' ||
+        saved === 'bluetooth' ||
+        saved === 'bluetooth-hid'
+      ) {
         this.setState({ connectionMode: saved as ConnectionMode });
+        if (saved === 'bluetooth-hid') {
+          this.activateBluetoothHidMode();
+        }
       }
     } catch {}
   }
 
   public async setConnectionMode(mode: ConnectionMode): Promise<void> {
+    const prevMode = this.state.connectionMode;
     this.setState({ connectionMode: mode });
     try {
       await AsyncStorage.setItem('padly_connection_mode', mode);
     } catch {}
+
+    if (prevMode === 'bluetooth-hid' && mode !== 'bluetooth-hid') {
+      this.deactivateBluetoothHidMode();
+    }
+
+    if (mode === 'bluetooth-hid') {
+      this.activateBluetoothHidMode();
+      return;
+    }
 
     // When mode is set to USB and we are not on USB, run immediate USB check
     if (mode === 'usb') {
@@ -163,6 +270,95 @@ export class ConnectionManager {
         } catch {}
       }
     }
+  }
+
+  public async activateBluetoothHidMode(): Promise<void> {
+    // 1. Clean up active companion app PC connection
+    this.cleanupActiveConnection(true);
+    this.cancelReconnect();
+    this.setState({
+      connectionMode: 'bluetooth-hid',
+      status: 'connecting',
+      transportKind: 'bluetooth',
+      pcName: 'Registering HID...',
+      humanError: undefined,
+      rttMs: 0,
+      avgRttMs: 0,
+      p95RttMs: 0,
+      jitterMs: 0,
+      lossPercent: 0,
+      pps: 0,
+      bps: 0,
+    });
+
+    try {
+      const supported = await bluetoothHidService.isSupported();
+      if (!supported) {
+        this.setState({
+          status: 'failed',
+          humanError:
+            'Bluetooth HID Device emulation is not supported on this device/ROM (requires Android 9+ and HID Device profile support).',
+        });
+        return;
+      }
+
+      await bluetoothHidService.registerApp();
+
+      if (this.hidUnsub) {
+        this.hidUnsub();
+      }
+
+      this.hidUnsub = bluetoothHidService.subscribe(({ isRegistered, connectedHost }) => {
+        if (this.state.connectionMode !== 'bluetooth-hid') return;
+
+        if (connectedHost) {
+          this.setState({
+            status: 'connected',
+            transportKind: 'bluetooth',
+            pcName: connectedHost.name || 'Bluetooth Host',
+            humanError: undefined,
+          });
+          this.startSendLoop();
+        } else if (isRegistered) {
+          this.setState({
+            status: 'connecting',
+            transportKind: 'bluetooth',
+            pcName: 'Waiting for Host...',
+            humanError: undefined,
+          });
+        } else {
+          this.setState({
+            status: 'idle',
+            transportKind: null,
+            pcName: null,
+          });
+        }
+      });
+    } catch (err: any) {
+      this.setState({
+        status: 'failed',
+        humanError: `Failed to register Bluetooth HID gamepad: ${
+          err?.message || 'Check Bluetooth settings and permissions.'
+        }`,
+      });
+    }
+  }
+
+  public async deactivateBluetoothHidMode(): Promise<void> {
+    if (this.hidUnsub) {
+      this.hidUnsub();
+      this.hidUnsub = null;
+    }
+    this.stopSendLoop();
+    try {
+      await bluetoothHidService.unregisterApp();
+    } catch {}
+    this.setState({
+      status: 'idle',
+      transportKind: null,
+      pcName: null,
+      humanError: undefined,
+    });
   }
 
   public setUsbHelpVisible(visible: boolean): void {
@@ -358,6 +554,7 @@ export class ConnectionManager {
    * Disconnects active connection, cancels auto-reconnect, and returns to idle state.
    */
   public disconnect(): void {
+    rumbleManager.stopRumble();
     this.isUserCanceled = true;
     this.cancelReconnect();
 
@@ -420,6 +617,8 @@ export class ConnectionManager {
   private handleIncomingWireFrame(wire: Uint8Array): void {
     if (!wire || wire.length === 0) return;
 
+    metricsCollector.recordReceive(wire.length);
+
     // A. Handshake Frame (0x01 prefix)
     if (wire[0] === 0x01) {
       if (this.state.status !== 'handshaking' || !this.lastConnectOptions || !this.currentPhoneSalt) {
@@ -456,11 +655,15 @@ export class ConnectionManager {
       this.sessionCipher = new SessionCipher(sessionKey, { direction: 'phone' });
       this.reconnectAttempt = 0;
 
+      const emulatedTarget = ack.target === 1 ? 'ds4' : 'xbox';
+
       this.setState({
         status: 'connected',
         pcName: ack.pc_name || 'PC',
+        emulatedTarget,
         reconnectAttempt: 0,
         error: undefined,
+        humanError: undefined,
       });
 
       // Wi-Fi Quality: Acquire low-latency lock if on Wi-Fi
@@ -495,25 +698,30 @@ export class ConnectionManager {
         case MessageType.PONG: {
           const pong = msg as PongMessage;
           const now = this.getTimestamp();
-          const rtt = Math.max(0, now - pong.echoed_ts);
-          const prevJitter = this.state.jitterMs;
-          const prevRtt = this.state.rttMs;
-          const jitterSample = Math.abs(rtt - prevRtt);
-          const newJitter = prevRtt === 0 ? 0 : Math.round(0.8 * prevJitter + 0.2 * jitterSample);
+          metricsCollector.recordPongReceived(pong.echoed_seq, pong.echoed_ts, now);
+          const snap = metricsCollector.getSnapshot(this.state.transportKind);
 
           this.setState({
-            rttMs: rtt,
-            jitterMs: newJitter,
+            rttMs: snap.rtt,
+            avgRttMs: snap.avgRtt,
+            p95RttMs: snap.p95Rtt,
+            jitterMs: snap.jitter,
+            lossPercent: snap.lossPercent,
+            pps: snap.pps,
+            bps: snap.bps,
+            isHighWifiLatency: snap.isHighWifiLatency,
           });
           break;
         }
 
         case MessageType.RUMBLE: {
-          // Handled by haptic driver
+          const rumble = msg as any;
+          rumbleManager.playRumble(rumble.strong, rumble.weak, rumble.duration_ms);
           break;
         }
 
         case MessageType.BYE: {
+          rumbleManager.stopRumble();
           // Remote PC disconnected
           this.handleTransportDrop(new Error('PC closed session (BYE)'));
           break;
@@ -572,6 +780,11 @@ export class ConnectionManager {
 
     this.latestState = state;
 
+    if (this.state.connectionMode === 'bluetooth-hid') {
+      bluetoothHidService.sendGamepadReport(state);
+      return;
+    }
+
     // Coalescing: If a send was recently dispatched (< 4ms ago),
     // replace pending state with the newest without queuing.
     if (this.sendCoalesceTimer !== null) {
@@ -601,6 +814,11 @@ export class ConnectionManager {
   }
 
   public sendStatePacket(state: ControllerState): void {
+    if (this.state.connectionMode === 'bluetooth-hid') {
+      bluetoothHidService.sendGamepadReport(state);
+      return;
+    }
+
     if (!this.activeTransport || !this.sessionCipher || this.state.status !== 'connected') {
       return;
     }
@@ -626,6 +844,7 @@ export class ConnectionManager {
     this.lastStateSendTime = Date.now();
     try {
       this.activeTransport.send(wire);
+      metricsCollector.recordSend(wire.length);
     } catch (err) {
       console.error('[ConnectionManager] Failed to send STATE frame:', err);
     }
@@ -655,7 +874,9 @@ export class ConnectionManager {
 
       try {
         const wire = this.sessionCipher.seal(encodeInner(ping));
+        metricsCollector.recordPingSent(ping.seq, now);
         this.activeTransport.send(wire);
+        metricsCollector.recordSend(wire.length);
       } catch (err) {
         console.warn('[ConnectionManager] Ping send failed:', err);
       }
@@ -669,6 +890,29 @@ export class ConnectionManager {
     }
   }
 
+  /**
+   * Executes a 200-ping latency test at 20ms intervals and returns detailed latency statistics.
+   */
+  public async runLatencyTest(): Promise<any> {
+    if (!this.sessionCipher || !this.activeTransport || this.state.status !== 'connected') {
+      throw new Error('Padly is not connected to a PC');
+    }
+
+    return metricsCollector.startLatencyTest((seq, ts) => {
+      if (this.sessionCipher && this.activeTransport) {
+        const ping: PingMessage = {
+          ver: 1,
+          type: MessageType.PING,
+          seq,
+          ts,
+        };
+        const wire = this.sessionCipher.seal(encodeInner(ping));
+        this.activeTransport.send(wire);
+        metricsCollector.recordSend(wire.length);
+      }
+    });
+  }
+
   // ==========================================================================
   // Release Safety & Transport Drops
   // ==========================================================================
@@ -678,6 +922,23 @@ export class ConnectionManager {
    * sends a neutral STATE (all inputs 0) and BYE, and zeroes local input state.
    */
   public sendReleaseSafetyPackets(): void {
+    if (this.state.connectionMode === 'bluetooth-hid') {
+      try {
+        bluetoothHidService.sendGamepadReport({
+          buttons: 0,
+          lx: 0,
+          ly: 0,
+          rx: 0,
+          ry: 0,
+          lt: 0,
+          rt: 0,
+          flags: 0,
+        });
+      } catch {}
+      resetAggregatorState();
+      return;
+    }
+
     if (this.sessionCipher && this.activeTransport) {
       try {
         // 1. Send neutral state (all buttons released, sticks centered, triggers 0)
@@ -770,15 +1031,49 @@ export class ConnectionManager {
     this.sendReleaseSafetyPackets();
     this.cleanupActiveConnection(false);
 
+    const humanError = formatConnectionErrorMessage(errMsg, droppedKind || undefined);
+
     if (this.isUserCanceled || !this.lastConnectOptions?.autoReconnect) {
       this.setState({
         status: 'failed',
         error: errMsg,
+        humanError,
       });
       return;
     }
 
+    this.setState({
+      error: errMsg,
+      humanError,
+    });
+
     this.scheduleAutoReconnect();
+  }
+
+  /**
+   * Forgets the currently paired PC: removes from PairingStore,
+   * cleanly terminates connection with release safety, and resets to idle.
+   */
+  public async forgetCurrentPC(): Promise<void> {
+    try {
+      const pairingStore = new PairingStore();
+      const list = await pairingStore.list();
+      if (list.length > 0) {
+        await pairingStore.remove(list[0].id);
+      }
+    } catch (err) {
+      console.warn('[ConnectionManager] Error forgetting PC:', err);
+    }
+
+    this.disconnect();
+    this.setState({
+      status: 'idle',
+      pcName: null,
+      emulatedTarget: undefined,
+      error: undefined,
+      humanError: undefined,
+      reconnectAttempt: 0,
+    });
   }
 
   private async attemptAutoFallback(targetKind: 'wifi' | 'bluetooth'): Promise<void> {
@@ -829,6 +1124,7 @@ export class ConnectionManager {
   }
 
   private cleanupActiveConnection(closeTransport: boolean): void {
+    rumbleManager.stopRumble();
     // Release Wi-Fi low-latency lock on disconnect or transport teardown
     WifiLockManager.release().catch(() => {});
 

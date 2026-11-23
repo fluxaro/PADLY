@@ -54,9 +54,11 @@ export type InputEventName = keyof InputEvents;
 export type InputEventHandler<K extends InputEventName> = (payload: InputEvents[K]) => void;
 
 /**
- * When true, every emitted event is logged to the console.
+ * Debug input logging:
+ * Default is FALSE to ensure zero per-frame console logging in production builds.
+ * In development builds, can be toggled on via setDebugInput(true).
  */
-export let DEBUG_INPUT = true;
+export let DEBUG_INPUT = false;
 
 export function setDebugInput(enabled: boolean): void {
   DEBUG_INPUT = enabled;
@@ -72,7 +74,7 @@ const listeners: ListenerMap = {};
  * Emit a typed input event on the bus.
  */
 export function emit<K extends InputEventName>(event: K, payload: InputEvents[K]): void {
-  if (DEBUG_INPUT) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__ && DEBUG_INPUT) {
     console.log(`[InputBus] ${event}:`, payload);
   }
 

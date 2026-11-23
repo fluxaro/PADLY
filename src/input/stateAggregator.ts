@@ -20,6 +20,7 @@
 
 import { subscribe, ButtonEvent, StickEvent, TriggerEvent } from './inputBus';
 import { BUTTON_ID_TO_BIT } from '../protocol/buttons';
+import { ControllerProfile, profileStore, DEFAULT_PROFILES } from '../profiles/ProfileStore';
 
 export interface ControllerState {
   buttons: number; // u32 bitmask
@@ -69,6 +70,67 @@ export function scaleTrigger(appVal: number): number {
   return Math.round(clamped * 255);
 }
 
+/**
+ * Applies active controller profile to raw stick input:
+ * - Deadzone: zeroes micro-drift inside threshold, rescales smoothly past it
+ * - Stick response curve: 'linear', 'exponential' (precise center), or 'aggressive' (fast ramp)
+ * - Stick sensitivity: multiplier on stick range
+ * - Serializes to int16 (-32768..32767, UP is NEGATIVE Y)
+ */
+export function processStickInput(
+  rawX: number,
+  rawY: number,
+  profile: ControllerProfile
+): { scaledX: number; scaledY: number } {
+  const deadzone = profile.deadzone ?? 0.10;
+  const curve = profile.stickCurve || 'linear';
+  const sensitivity = profile.stickSensitivity || 1.0;
+
+  const processAxis = (val: number): number => {
+    const abs = Math.abs(val);
+    if (abs <= deadzone || abs === 0) return 0;
+
+    // 1. Rescale smoothly from edge of deadzone to full throw [0, 1]
+    const scaled = Math.min(1, (abs - deadzone) / Math.max(0.001, 1 - deadzone));
+
+    // 2. Response curve
+    let curved = scaled;
+    if (curve === 'exponential') {
+      curved = Math.pow(scaled, 2);
+    } else if (curve === 'aggressive') {
+      curved = Math.pow(scaled, 0.7);
+    }
+
+    // 3. Sensitivity
+    const finalVal = Math.min(1, curved * sensitivity);
+    return Math.sign(val) * finalVal;
+  };
+
+  const normX = processAxis(rawX);
+  const normY = processAxis(rawY);
+
+  return {
+    scaledX: scaleStickX(normX),
+    scaledY: scaleStickY(normY),
+  };
+}
+
+/**
+ * Applies active controller profile to trigger input:
+ * - 'smooth': analog 0..255
+ * - 'hair-trigger': instantaneous digital snap to 255 if pressed > 5%, otherwise 0
+ */
+export function processTriggerInput(
+  rawVal: number,
+  profile: ControllerProfile
+): number {
+  if (rawVal <= 0) return 0;
+  if (profile.triggerBehavior === 'hair-trigger') {
+    return rawVal > 0.05 ? 255 : 0;
+  }
+  return scaleTrigger(rawVal);
+}
+
 export type StateChangeCallback = (state: ControllerState) => void;
 
 class StateAggregator {
@@ -83,15 +145,31 @@ class StateAggregator {
     flags: 0,
   };
 
+  private profile: ControllerProfile = DEFAULT_PROFILES[0];
   private listeners = new Set<StateChangeCallback>();
   private unsubscribers: (() => void)[] = [];
 
   constructor() {
     this.start();
+    // Auto-sync with ProfileStore
+    this.profile = profileStore.getActiveProfile();
+    this.unsubscribers.push(
+      profileStore.onChange((active) => {
+        this.setProfile(active);
+      })
+    );
+  }
+
+  public setProfile(profile: ControllerProfile): void {
+    this.profile = { ...profile };
+  }
+
+  public getProfile(): ControllerProfile {
+    return { ...this.profile };
   }
 
   public start(): void {
-    if (this.unsubscribers.length > 0) return;
+    if (this.unsubscribers.length > 1) return; // Keep profile listener
 
     // 1. Subscribe to button events
     const unsubButton = subscribe('button', (event: ButtonEvent) => {
@@ -112,10 +190,9 @@ class StateAggregator {
       }
     });
 
-    // 2. Subscribe to stick events
+    // 2. Subscribe to stick events with profile processing
     const unsubStick = subscribe('stick', (event: StickEvent) => {
-      const scaledX = scaleStickX(event.x);
-      const scaledY = scaleStickY(event.y);
+      const { scaledX, scaledY } = processStickInput(event.x, event.y, this.profile);
 
       if (event.id === 'left') {
         if (this.state.lx !== scaledX || this.state.ly !== scaledY) {
@@ -130,9 +207,9 @@ class StateAggregator {
       }
     });
 
-    // 3. Subscribe to trigger events
+    // 3. Subscribe to trigger events with profile processing
     const unsubTrigger = subscribe('trigger', (event: TriggerEvent) => {
-      const scaled = scaleTrigger(event.value);
+      const scaled = processTriggerInput(event.value, this.profile);
 
       if (event.id === 'LT') {
         if (this.state.lt !== scaled) {

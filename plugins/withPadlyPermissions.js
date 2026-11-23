@@ -27,6 +27,7 @@ const withPadlyPermissions = (config) => {
       { name: 'android.permission.CAMERA' },
       { name: 'android.permission.BLUETOOTH_CONNECT' },
       { name: 'android.permission.BLUETOOTH_SCAN' },
+      { name: 'android.permission.BLUETOOTH_ADVERTISE' },
       {
         name: 'android.permission.BLUETOOTH',
         attributes: {

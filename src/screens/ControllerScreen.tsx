@@ -19,6 +19,7 @@ import { KeyboardMode } from './KeyboardMode';
 import { TouchpadMode } from './TouchpadMode';
 import { PairScreen } from './PairScreen';
 import { UsbHelpBottomSheet } from '../components/UsbHelpBottomSheet';
+import { BluetoothDevicePickerModal } from '../components/BluetoothDevicePickerModal';
 import { discoveryService } from '../pairing/DiscoveryService';
 import { usbWatcher } from '../net/UsbWatcher';
 import { useConnection } from '../net/useConnection';
@@ -26,6 +27,7 @@ import { connectionManager } from '../net/ConnectionManager';
 import { DEBUG_LAYOUT, SOCKETS } from '../theme/layout';
 import { COLORS } from '../theme/colors';
 import { isHapticsEnabled } from '../hooks/useHaptics';
+import { profileStore } from '../profiles/ProfileStore';
 
 export const ControllerScreen: React.FC = () => {
   useKeepAwake();
@@ -38,6 +40,7 @@ export const ControllerScreen: React.FC = () => {
   // Modal State for interactive dropdowns/popovers
   const [activeModal, setActiveModal] = useState<ModalType>(null);
   const [isPairingOpen, setIsPairingOpen] = useState<boolean>(false);
+  const [isBtPickerOpen, setIsBtPickerOpen] = useState<boolean>(false);
 
   // Button Style Preference: 'playstation' (△, □, ○, ✕) vs 'xbox' (Y, X, B, A)
   const [buttonStyle, setButtonStyle] = useState<'playstation' | 'xbox'>('playstation');
@@ -46,8 +49,16 @@ export const ControllerScreen: React.FC = () => {
   const [hapticsOn, setHapticsOn] = useState<boolean>(isHapticsEnabled());
   const [brightness, setBrightness] = useState<number>(1.0);
   const [themeColor, setThemeColor] = useState<string>(COLORS.accent);
-  const [activeProfile, setActiveProfile] = useState<string>('Default Profile');
+  const [activeProfile, setActiveProfile] = useState<string>(profileStore.getActiveProfile().name);
   const [isDebugLayoutActive, setIsDebugLayoutActive] = useState<boolean>(DEBUG_LAYOUT);
+
+  // Sync with ProfileStore
+  useEffect(() => {
+    return profileStore.onChange((active) => {
+      setActiveProfile(active.name);
+      setHapticsOn(active.hapticsEnabled);
+    });
+  }, []);
 
   // Lock orientation to landscape while mounted
   useEffect(() => {
@@ -212,10 +223,14 @@ export const ControllerScreen: React.FC = () => {
         activeModal={activeModal}
         onClose={() => setActiveModal(null)}
         onOpenPairing={() => setIsPairingOpen(true)}
+        onOpenBluetoothPicker={() => setIsBtPickerOpen(true)}
         buttonStyle={buttonStyle}
         onToggleButtonStyle={setButtonStyle}
         hapticsOn={hapticsOn}
-        onToggleHaptics={setHapticsOn}
+        onToggleHaptics={(on) => {
+          setHapticsOn(on);
+          profileStore.updateActiveProfile({ hapticsEnabled: on });
+        }}
         brightness={brightness}
         onSelectBrightness={setBrightness}
         themeColor={themeColor}
@@ -236,6 +251,12 @@ export const ControllerScreen: React.FC = () => {
       <UsbHelpBottomSheet
         visible={!!conn.isUsbHelpVisible}
         onClose={() => connectionManager.setUsbHelpVisible(false)}
+      />
+
+      {/* Bluetooth RFCOMM Device Picker Modal (Android) */}
+      <BluetoothDevicePickerModal
+        visible={isBtPickerOpen}
+        onClose={() => setIsBtPickerOpen(false)}
       />
     </View>
   );

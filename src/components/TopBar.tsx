@@ -135,20 +135,27 @@ export const TopBar: React.FC<TopBarProps> = ({
       ? 'USB'
       : conn.connectionMode === 'wifi'
       ? 'Wi-Fi'
+      : conn.connectionMode === 'bluetooth-hid'
+      ? 'Direct HID'
       : 'Bluetooth (higher latency)';
 
-  const transportLabel = isConnected
-    ? conn.connectionMode === 'auto'
-      ? `Auto • ${activeTransportName || 'Linked'}`
-      : activeTransportName || modeDisplayName
-    : `${modeDisplayName} • ${conn.status === 'idle' ? 'Ready' : conn.status}`;
+  const transportLabel =
+    conn.connectionMode === 'bluetooth-hid'
+      ? isConnected
+        ? `Direct HID • ${conn.pcName || 'Connected'}`
+        : `Direct HID • ${conn.status === 'connecting' ? 'Advertising' : 'Ready'}`
+      : isConnected
+      ? conn.connectionMode === 'auto'
+        ? `Auto • ${activeTransportName || 'Linked'}`
+        : activeTransportName || modeDisplayName
+      : `${modeDisplayName} • ${conn.status === 'idle' ? 'Ready' : conn.status}`;
 
   // Icon based on transport / selected mode
   const activeIconKind = conn.transportKind || conn.connectionMode;
   const linkIcon: keyof typeof Ionicons.glyphMap =
     activeIconKind === 'wifi'
       ? 'wifi-outline'
-      : activeIconKind === 'bluetooth'
+      : activeIconKind === 'bluetooth' || activeIconKind === 'bluetooth-hid'
       ? 'bluetooth-outline'
       : 'hardware-chip-outline';
 
@@ -157,34 +164,56 @@ export const TopBar: React.FC<TopBarProps> = ({
   return (
     <View style={[styles.container, { height: 38 * scale }]}>
       {/* 1. Left Pill: Connection Status (Opens Connection Details Dropdown) */}
-      <TouchableOpacity
-        activeOpacity={0.8}
-        onPress={() => onOpenModal('connection')}
-        style={[
-          styles.pill,
-          {
-            paddingHorizontal: 10 * scale,
-            paddingVertical: 5 * scale,
-            borderRadius: 16 * scale,
-          },
-        ]}
-      >
-        <View style={[styles.statusDot, { backgroundColor: statusDotColor }]} />
-        <View style={styles.statusTextGroup}>
-          <Text style={[styles.statusPrimary, { fontSize: Math.max(9, 10.5 * scale) }]}>
-            {primaryStatusText}
-          </Text>
-          <Text style={[styles.statusSecondary, { fontSize: Math.max(7, 8 * scale) }]}>
-            {transportLabel}
-          </Text>
-        </View>
-        <Ionicons
-          name={linkIcon}
-          size={Math.max(10, 12 * scale)}
-          color="#8A98AC"
-          style={{ marginLeft: 4 * scale }}
-        />
-      </TouchableOpacity>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 * scale }}>
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={() => onOpenModal('connection')}
+          style={[
+            styles.pill,
+            {
+              paddingHorizontal: 10 * scale,
+              paddingVertical: 5 * scale,
+              borderRadius: 16 * scale,
+            },
+          ]}
+        >
+          <View style={[styles.statusDot, { backgroundColor: statusDotColor }]} />
+          <View style={styles.statusTextGroup}>
+            <Text style={[styles.statusPrimary, { fontSize: Math.max(9, 10.5 * scale) }]}>
+              {primaryStatusText}
+            </Text>
+            <Text style={[styles.statusSecondary, { fontSize: Math.max(7, 8 * scale) }]}>
+              {transportLabel}
+            </Text>
+          </View>
+          <Ionicons
+            name={linkIcon}
+            size={Math.max(10, 12 * scale)}
+            color="#8A98AC"
+            style={{ marginLeft: 4 * scale }}
+          />
+        </TouchableOpacity>
+
+        {conn.isHighWifiLatency && (
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => onOpenModal('tuning')}
+            style={[
+              styles.warningBadge,
+              {
+                paddingHorizontal: 6 * scale,
+                paddingVertical: 4 * scale,
+                borderRadius: 12 * scale,
+              },
+            ]}
+          >
+            <Ionicons name="warning" size={Math.max(10, 11 * scale)} color="#FF9500" />
+            <Text style={[styles.warningBadgeText, { fontSize: Math.max(7.5, 9 * scale) }]}>
+              Wi-Fi &gt;40ms
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
       {/* 2. Center Pill: Mode Switcher Tabs */}
       <View
@@ -280,6 +309,18 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.35,
     shadowRadius: 4,
     elevation: 4,
+  },
+  warningBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255, 149, 0, 0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 149, 0, 0.55)',
+  },
+  warningBadgeText: {
+    color: '#FF9500',
+    fontWeight: '800',
   },
   statusDot: {
     width: 7,
